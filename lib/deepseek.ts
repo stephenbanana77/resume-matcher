@@ -20,11 +20,7 @@ export interface AnalysisResult {
   summary: string
 }
 
-export async function analyzeResume(
-  resumeText: string,
-  jdText: string
-): Promise<AnalysisResult> {
-  const prompt = `你是一位资深 HR 和技术面试官。请分析以下简历与岗位描述的匹配程度。
+const PROMPT = (resumeText: string, jdText: string) => `你是一位资深 HR 和技术面试官。请分析以下简历与岗位描述的匹配程度。
 
 ## 简历内容
 ${resumeText}
@@ -58,36 +54,69 @@ ${jdText}
   "summary": "<100字以内的整体评价，包括当前匹配情况和最关键的提升方向>"
 }`
 
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 60000)
+export async function analyzeResumeStream(
+  resumeText: string,
+  jdText: string
+): Promise<ReadableStream<Uint8Array>> {
+  const encoder = new TextEncoder()
 
-  let response: Response
-  try {
-    response = await fetch('https://api.deepseek.com/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${process.env.DEEPSEEK_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: 'deepseek-chat',
-        messages: [{ role: 'user', content: prompt }],
-        response_format: { type: 'json_object' },
-        temperature: 0.3,
-      }),
-      signal: controller.signal,
-    })
-  } catch (e) {
-    throw new Error('DeepSeek API 连接超时，请检查网络或稍后重试')
-  } finally {
-    clearTimeout(timeout)
+  const deepseekRes = await fetch('https://api.deepseek.com/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${process.env.DEEPSEEK_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: 'deepseek-chat',
+      messages: [{ role: 'user', content: PROMPT(resumeText, jdText) }],
+      stream: true,
+      temperature: 0.3,
+    }),
+  })
+
+  if (!deepseekRes.ok) {
+    throw new Error(`DeepSeek API error: ${deepseekRes.status}`)
   }
 
-  if (!response.ok) {
-    throw new Error(`DeepSeek API error: ${response.status}`)
-  }
+  const reader = deepseekRes.body!.getReader()
+  const decoder = new TextDecoder()
+  let accumulated = ''
 
-  const data = await response.json()
-  const content = data.choices[0].message.content
-  return JSON.parse(content) as AnalysisResult
+  return new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const send = (obj: object) =>
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`))
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+
+          const chunk = decoder.decode(value, { stream: true })
+          for (const line of chunk.split('\n')) {
+            const trimmed = line.trim()
+            if (!trimmed.startsWith('data: ')) continue
+            const raw = trimmed.slice(6)
+            if (raw === '[DONE]') continue
+            try {
+              const parsed = JSON.parse(raw)
+              const content: string = parsed.choices?.[0]?.delta?.content ?? ''
+              if (content) {
+                accumulated += content
+                send({ type: 'chunk', content })
+              }
+            } catch {}
+          }
+        }
+
+        const result = JSON.parse(accumulated) as AnalysisResult
+        send({ type: 'done', result })
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e)
+        send({ type: 'error', message: msg })
+      } finally {
+        controller.close()
+      }
+    },
+  })
 }
