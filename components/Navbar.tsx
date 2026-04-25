@@ -20,7 +20,10 @@ export default function Navbar() {
       </Link>
       <div className="flex items-center gap-6 text-sm">
         <Link href="/analyze" className="text-gray-300 hover:text-white transition-colors">
-          新分析
+          简历分析
+        </Link>
+        <Link href="/jd" className="text-gray-300 hover:text-white transition-colors">
+          岗位解读
         </Link>
         <Link href="/history" className="text-gray-300 hover:text-white transition-colors">
           历史记录
