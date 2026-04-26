@@ -28,6 +28,9 @@ export default function Navbar() {
         <Link href="/history" className="text-gray-300 hover:text-white transition-colors">
           历史记录
         </Link>
+        <Link href="/applications" className="text-gray-300 hover:text-white transition-colors">
+          投递追踪
+        </Link>
         <button
           onClick={handleLogout}
           className="text-gray-400 hover:text-white transition-colors"
